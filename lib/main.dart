@@ -1314,6 +1314,43 @@ class OddsApiService {
 
 final List<Map<String, dynamic>> allMatches = [];
 
+// ─── ACCA SLIP ───────────────────────────────────────────────────────────────
+
+final List<Map<String, dynamic>> accaSlip = [];
+final _accaCount = ValueNotifier<int>(0);
+
+void addToAcca(BuildContext context, Map<String, dynamic> match, String outcome, String outcomeKey) {
+  final matchName = '${match["home"]} v ${match["away"]}';
+  accaSlip.removeWhere((l) => l['matchName'] == matchName);
+  accaSlip.add({
+    'matchName':  matchName,
+    'home':       match['home'] as String,
+    'away':       match['away'] as String,
+    'outcome':    outcome,
+    'outcomeKey': outcomeKey,
+    'bookmakers': List<Map<String, dynamic>>.from(
+      (match['bookmakers'] as List<dynamic>? ?? []).map((b) => Map<String, dynamic>.from(b as Map)),
+    ),
+  });
+  _accaCount.value = accaSlip.length;
+  ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+    content: Text('$outcome added (${accaSlip.length} ${accaSlip.length == 1 ? "leg" : "legs"})'),
+    backgroundColor: const Color(0xFF00C853),
+    duration: const Duration(seconds: 2),
+    behavior: SnackBarBehavior.floating,
+    action: SnackBarAction(
+      label: 'VIEW',
+      textColor: Colors.black,
+      onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const BetBuilderScreen())),
+    ),
+  ));
+}
+
+void removeFromAcca(String matchName) {
+  accaSlip.removeWhere((l) => l['matchName'] == matchName);
+  _accaCount.value = accaSlip.length;
+}
+
 
 // ─── MAIN SCREEN ─────────────────────────────────────────────────────────────
 
@@ -1429,6 +1466,7 @@ class _MainScreenState extends State<MainScreen> {
     final screens = [
       HomeTab(liveError: _liveError, onRefresh: _fetchLive),
       const SportsTab(),
+      const BetBuilderScreen(),
       const TrackerTab(),
       const AccountTab(),
     ];
@@ -1445,6 +1483,27 @@ class _MainScreenState extends State<MainScreen> {
         items: [
           const BottomNavigationBarItem(icon: Icon(Icons.home), label: 'Home'),
           const BottomNavigationBarItem(icon: Icon(Icons.sports_soccer), label: 'Sports'),
+          BottomNavigationBarItem(
+            label: 'Builder',
+            icon: ValueListenableBuilder<int>(
+              valueListenable: _accaCount,
+              builder: (_, count, __) => Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  const Icon(Icons.layers),
+                  if (count > 0) Positioned(
+                    right: -6, top: -4,
+                    child: Container(
+                      width: 16, height: 16,
+                      decoration: const BoxDecoration(color: kGreen, shape: BoxShape.circle),
+                      child: Center(child: Text('$count',
+                          style: const TextStyle(color: Colors.black, fontSize: 9, fontWeight: FontWeight.w900))),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
           const BottomNavigationBarItem(icon: Icon(Icons.bar_chart), label: 'Tracker'),
           const BottomNavigationBarItem(icon: Icon(Icons.person), label: 'Account'),
         ],
@@ -2933,8 +2992,64 @@ class MatchCard extends StatelessWidget {
               const SizedBox(height: 6),
               edgeTrendBadge(match['edgeTrend'] as Map<String, dynamic>?),
             ],
+            // Acca add row
+            const SizedBox(height: 10),
+            const Divider(height: 1, thickness: 0.3, color: Color(0xFF2C2C2C)),
+            const SizedBox(height: 8),
+            ValueListenableBuilder<int>(
+              valueListenable: _accaCount,
+              builder: (ctx, _, __) => _accaRow(ctx, match),
+            ),
           ]),
         ),
+      ),
+    );
+  }
+
+  Widget _accaRow(BuildContext context, Map<String, dynamic> match) {
+    final hasDraw = (match['drawPct'] as int) > 0;
+    final home    = match['home'] as String;
+    final away    = match['away'] as String;
+    return Row(children: [
+      Expanded(child: _accaChip(context, match, '$home Win', 'homePct')),
+      if (hasDraw) ...[
+        const SizedBox(width: 4),
+        Expanded(child: _accaChip(context, match, 'Draw', 'drawPct')),
+      ],
+      const SizedBox(width: 4),
+      Expanded(child: _accaChip(context, match, '$away Win', 'awayPct')),
+    ]);
+  }
+
+  Widget _accaChip(BuildContext context, Map<String, dynamic> match, String outcome, String key) {
+    final matchName  = '${match["home"]} v ${match["away"]}';
+    final isAdded    = accaSlip.any((l) => l['matchName'] == matchName && l['outcome'] == outcome);
+    final otherAdded = accaSlip.any((l) => l['matchName'] == matchName && l['outcome'] != outcome);
+    return GestureDetector(
+      onTap: () => isAdded ? removeFromAcca(matchName) : addToAcca(context, match, outcome, key),
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 5, horizontal: 4),
+        decoration: BoxDecoration(
+          color: isAdded ? const Color(0xFF00C853).withOpacity(0.12) : Colors.transparent,
+          borderRadius: BorderRadius.circular(4),
+          border: Border.all(
+            color: isAdded
+                ? const Color(0xFF00C853).withOpacity(0.5)
+                : otherAdded ? const Color(0xFF2C2C2C) : const Color(0xFF333333),
+          ),
+        ),
+        child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+          Icon(isAdded ? Icons.check : Icons.add, size: 9,
+              color: isAdded ? const Color(0xFF00C853) : Colors.grey),
+          const SizedBox(width: 3),
+          Flexible(child: Text(outcome,
+            style: TextStyle(
+              color: isAdded ? const Color(0xFF00C853) : Colors.grey,
+              fontSize: 9, fontWeight: FontWeight.w600,
+            ),
+            maxLines: 1, overflow: TextOverflow.ellipsis, textAlign: TextAlign.center,
+          )),
+        ]),
       ),
     );
   }
@@ -4961,6 +5076,255 @@ class TermsOfServiceScreen extends StatelessWidget {
       Text(body, style: TextStyle(
         color: Colors.grey.shade400, fontSize: 13.5, height: 1.65,
       )),
+    ]),
+  );
+}
+
+// ─── BET BUILDER SCREEN ──────────────────────────────────────────────────────
+
+class BetBuilderScreen extends StatefulWidget {
+  const BetBuilderScreen({super.key});
+  @override
+  State<BetBuilderScreen> createState() => _BetBuilderScreenState();
+}
+
+class _BetBuilderScreenState extends State<BetBuilderScreen> {
+  @override
+  void initState() {
+    super.initState();
+    _accaCount.addListener(_rebuild);
+  }
+
+  @override
+  void dispose() {
+    _accaCount.removeListener(_rebuild);
+    super.dispose();
+  }
+
+  void _rebuild() => setState(() {});
+
+  List<Map<String, dynamic>> _computeAccaOdds() {
+    final legs = accaSlip;
+    if (legs.isEmpty) return [];
+
+    final names = <String>{};
+    for (final leg in legs) {
+      for (final b in (leg['bookmakers'] as List<Map<String, dynamic>>)) {
+        names.add(b['name'] as String);
+      }
+    }
+
+    final result = <Map<String, dynamic>>[];
+    for (final name in names) {
+      double combined = 1.0;
+      bool complete = true;
+      for (final leg in legs) {
+        final bkms = leg['bookmakers'] as List<Map<String, dynamic>>;
+        Map<String, dynamic>? bk;
+        for (final b in bkms) {
+          if (b['name'] == name) { bk = b; break; }
+        }
+        if (bk == null) { complete = false; break; }
+        final pct = (bk[leg['outcomeKey']] as int?) ?? 0;
+        if (pct <= 0) { complete = false; break; }
+        combined *= 100 / pct;
+      }
+      if (complete && combined > 1.0) {
+        result.add({'name': name, 'combined': combined});
+      }
+    }
+
+    result.sort((a, b) => (b['combined'] as double).compareTo(a['combined'] as double));
+    return result;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final legs   = List<Map<String, dynamic>>.from(accaSlip);
+    final canPop = Navigator.canPop(context);
+
+    return Scaffold(
+      backgroundColor: kBg,
+      appBar: AppBar(
+        backgroundColor: kCard,
+        leading: canPop
+            ? IconButton(
+                icon: const Icon(Icons.arrow_back, color: Colors.white),
+                onPressed: () => Navigator.pop(context))
+            : null,
+        title: Row(children: [
+          const Icon(Icons.layers, color: kGreen, size: 18),
+          const SizedBox(width: 8),
+          Text(
+            legs.isEmpty ? 'Bet Builder' : 'Bet Builder (${legs.length} legs)',
+            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 16),
+          ),
+        ]),
+        actions: [
+          if (legs.isNotEmpty)
+            TextButton(
+              onPressed: () { accaSlip.clear(); _accaCount.value = 0; },
+              child: const Text('Clear all', style: TextStyle(color: Colors.red, fontWeight: FontWeight.w700)),
+            ),
+        ],
+      ),
+      body: legs.isEmpty ? _emptyState() : _content(context, legs),
+    );
+  }
+
+  Widget _emptyState() => Center(
+    child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+      Icon(Icons.layers_outlined, color: Colors.grey.shade700, size: 64),
+      const SizedBox(height: 16),
+      const Text('No picks yet',
+          style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 18)),
+      const SizedBox(height: 10),
+      Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 44),
+        child: Text(
+          'Tap the + chips at the bottom of any match card to add selections',
+          style: TextStyle(color: Colors.grey.shade500, fontSize: 13),
+          textAlign: TextAlign.center,
+        ),
+      ),
+    ]),
+  );
+
+  Widget _content(BuildContext context, List<Map<String, dynamic>> legs) {
+    final accaOdds = legs.length >= 2 ? _computeAccaOdds() : <Map<String, dynamic>>[];
+
+    return ListView(
+      padding: const EdgeInsets.all(14),
+      children: [
+        // Legs
+        Text('YOUR SELECTIONS',
+            style: TextStyle(color: Colors.grey.shade400, fontSize: 11,
+                fontWeight: FontWeight.w700, letterSpacing: 0.5)),
+        const SizedBox(height: 10),
+        ...legs.map(_legTile),
+
+        const SizedBox(height: 22),
+
+        // Odds comparison
+        if (legs.length < 2) ...[
+          _infoBox(Icons.info_outline, Colors.grey,
+              'Add at least 2 selections to compare accumulator odds'),
+        ] else if (accaOdds.isEmpty) ...[
+          _infoBox(Icons.search_off, Colors.orange,
+              'No single bookmaker covers all your selections. Try removing a leg or choosing different outcomes.'),
+        ] else ...[
+          Row(children: [
+            Text('${legs.length}-LEG ACCUMULATOR',
+                style: TextStyle(color: Colors.grey.shade400, fontSize: 11,
+                    fontWeight: FontWeight.w700, letterSpacing: 0.5)),
+            const Spacer(),
+            Text('Best price first', style: TextStyle(color: Colors.grey.shade700, fontSize: 10)),
+          ]),
+          const SizedBox(height: 10),
+          ...accaOdds.asMap().entries.map((e) => _oddsRow(context, e.value, e.key == 0)),
+          const SizedBox(height: 12),
+          Text('Only bookmakers covering every selection are shown.',
+              style: TextStyle(color: Colors.grey.shade700, fontSize: 11)),
+        ],
+
+        const SizedBox(height: 32),
+      ],
+    );
+  }
+
+  Widget _legTile(Map<String, dynamic> leg) => Container(
+    margin: const EdgeInsets.only(bottom: 8),
+    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+    decoration: BoxDecoration(
+      color: kCard,
+      borderRadius: BorderRadius.circular(10),
+      border: Border.all(color: Colors.grey.shade900),
+    ),
+    child: Row(children: [
+      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(leg['matchName'] as String,
+            style: TextStyle(color: Colors.grey.shade500, fontSize: 11)),
+        const SizedBox(height: 4),
+        Text(leg['outcome'] as String,
+            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 14)),
+      ])),
+      GestureDetector(
+        onTap: () => removeFromAcca(leg['matchName'] as String),
+        child: Container(
+          padding: const EdgeInsets.all(6),
+          decoration: BoxDecoration(
+            color: Colors.red.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(color: Colors.red.withOpacity(0.3)),
+          ),
+          child: const Icon(Icons.close, color: Colors.red, size: 14),
+        ),
+      ),
+    ]),
+  );
+
+  Widget _oddsRow(BuildContext context, Map<String, dynamic> bk, bool isBest) {
+    final name     = bk['name'] as String;
+    final combined = bk['combined'] as double;
+    return GestureDetector(
+      onTap: () => launchBookmaker(context, name),
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        decoration: BoxDecoration(
+          color: isBest ? kGreen.withOpacity(0.06) : kBg,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: isBest ? kGreen.withOpacity(0.4) : Colors.grey.shade900),
+        ),
+        child: Row(children: [
+          Expanded(child: Row(children: [
+            Text(name,
+                style: TextStyle(
+                  color: isBest ? Colors.white : Colors.grey.shade300,
+                  fontWeight: FontWeight.w600, fontSize: 13,
+                )),
+            if (isBest) ...[
+              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: kGreen.withOpacity(0.2), borderRadius: BorderRadius.circular(4),
+                ),
+                child: const Text('BEST ODDS',
+                    style: TextStyle(color: kGreen, fontSize: 9, fontWeight: FontWeight.w800)),
+              ),
+            ],
+          ])),
+          Text(combined.toStringAsFixed(2),
+              style: TextStyle(
+                color: isBest ? kGreen : Colors.white,
+                fontWeight: FontWeight.w800, fontSize: 20,
+              )),
+          const SizedBox(width: 12),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+            decoration: BoxDecoration(
+              color: kGreen.withOpacity(0.15), borderRadius: BorderRadius.circular(6),
+              border: Border.all(color: kGreen.withOpacity(0.4)),
+            ),
+            child: const Text('BET', style: TextStyle(color: kGreen, fontWeight: FontWeight.w800, fontSize: 12)),
+          ),
+        ]),
+      ),
+    );
+  }
+
+  Widget _infoBox(IconData icon, Color color, String message) => Container(
+    padding: const EdgeInsets.all(14),
+    decoration: BoxDecoration(
+      color: kCard, borderRadius: BorderRadius.circular(10),
+      border: Border.all(color: color.withOpacity(0.3)),
+    ),
+    child: Row(children: [
+      Icon(icon, color: color, size: 18),
+      const SizedBox(width: 12),
+      Expanded(child: Text(message,
+          style: TextStyle(color: Colors.grey.shade400, fontSize: 13))),
     ]),
   );
 }
