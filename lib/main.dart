@@ -63,7 +63,7 @@ Future<void> sendEdgeNotification({
 }) async {
   const channel = AndroidNotificationDetails(
     'edge_alerts', 'Edge Alerts',
-    channelDescription: 'Notifications when AI edge exceeds your threshold',
+    channelDescription: 'Notifications when model edge exceeds your threshold',
     importance: Importance.high,
     priority: Priority.high,
     color: Color(0xFF00C853),
@@ -1021,6 +1021,7 @@ class BackendService {
       'sport':          m['competition'],
       'sportKey':       sportKey,
       'time':           _fmtTime(m['commence_time'] as String),
+      'kickoffUtc':     m['commence_time'] as String,
       'home':           home,
       'away':           away,
       // Model (Poisson) probabilities — used as the "AI" probability
@@ -1263,6 +1264,7 @@ class OddsApiService {
     return {
       'sport': sport['label'], 'sportKey': sport['sportKey'],
       'time': time,
+      'kickoffUtc': ev['commence_time'] as String,
       'home': home, 'away': away,
       'homePct': aiH, 'drawPct': aiD, 'awayPct': max(1, aiA),
       'bookieHomePct': bkH, 'bookieDrawPct': bkD, 'bookieAwayPct': bkA,
@@ -1282,7 +1284,7 @@ class OddsApiService {
   static Map<String, dynamic> _stub(String home, String away, String time,
       Map<String, String> sport, List bkms) => {
     'sport': sport['label'], 'sportKey': sport['sportKey'],
-    'time': time, 'home': home, 'away': away,
+    'time': time, 'kickoffUtc': '', 'home': home, 'away': away,
     'homePct': 40, 'drawPct': 27, 'awayPct': 33,
     'bookieHomePct': 38, 'bookieDrawPct': 28, 'bookieAwayPct': 34,
     'homeLogo': teamLogo(home), 'awayLogo': teamLogo(away),
@@ -1357,6 +1359,14 @@ class _MainScreenState extends State<MainScreen> {
         snapshotOdds();
         allMatches.clear();
         allMatches.addAll(live);
+        allMatches.sort((a, b) {
+          final ta = a['kickoffUtc'] as String? ?? '';
+          final tb = b['kickoffUtc'] as String? ?? '';
+          if (ta.isEmpty && tb.isEmpty) return 0;
+          if (ta.isEmpty) return 1;
+          if (tb.isEmpty) return -1;
+          return ta.compareTo(tb);
+        });
         for (var i = 0; i < min(4, allMatches.length); i++) {
           allMatches[i]['featured'] = true;
         }
@@ -2550,7 +2560,7 @@ class _AccountTabState extends State<AccountTab> {
                 ),
               ]),
               const SizedBox(height: 5),
-              Text('Notify me when AI finds an edge above my threshold',
+              Text('Notify me when model finds an edge above my threshold',
                   style: TextStyle(color: Colors.grey.shade500, fontSize: 12)),
               const SizedBox(height: 18),
               Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
@@ -2966,10 +2976,10 @@ class MatchCard extends StatelessWidget {
       border: Border.all(color: const Color(0xFFFFD700).withOpacity(0.5)),
     ),
     child: Row(mainAxisSize: MainAxisSize.min, children: [
-      const Text('🔥', style: TextStyle(fontSize: 11)),
+      const Text('📊', style: TextStyle(fontSize: 11)),
       const SizedBox(width: 5),
       Text(
-        '+$edge% EDGE',
+        'Model +$edge%',
         style: const TextStyle(color: Color(0xFFFFD700), fontSize: 11, fontWeight: FontWeight.w700),
       ),
     ]),
@@ -2977,21 +2987,34 @@ class MatchCard extends StatelessWidget {
 
   Widget _oddsRow(Map<String, dynamic> match) {
     final hasDraw = (match['drawPct'] as int) > 0;
-    final hOdds = pctToDecimalOdds((match['bookieHomePct'] as int?) ?? 0);
-    final dOdds = pctToDecimalOdds((match['bookieDrawPct'] as int?) ?? 0);
-    final aOdds = pctToDecimalOdds((match['bookieAwayPct'] as int?) ?? 0);
+    final bkms = match['bookmakers'] as List<dynamic>? ?? [];
+    String bestHomeBk = '', bestDrawBk = '', bestAwayBk = '';
+    int bestHomePct = 999, bestDrawPct = 999, bestAwayPct = 999;
+    for (final b in bkms) {
+      final bmap = b as Map;
+      final name = bmap['name'] as String? ?? '';
+      final hp = (bmap['homePct'] as int?) ?? 0;
+      final dp = (bmap['drawPct'] as int?) ?? 0;
+      final ap = (bmap['awayPct'] as int?) ?? 0;
+      if (hp > 0 && hp < bestHomePct) { bestHomePct = hp; bestHomeBk = name; }
+      if (dp > 0 && dp < bestDrawPct) { bestDrawPct = dp; bestDrawBk = name; }
+      if (ap > 0 && ap < bestAwayPct) { bestAwayPct = ap; bestAwayBk = name; }
+    }
+    if (bestHomePct == 999) bestHomePct = (match['bookieHomePct'] as int?) ?? 0;
+    if (bestDrawPct == 999) bestDrawPct = (match['bookieDrawPct'] as int?) ?? 0;
+    if (bestAwayPct == 999) bestAwayPct = (match['bookieAwayPct'] as int?) ?? 0;
     return Row(children: [
-      _oddsPill(match['home'] as String, hOdds, kGreen),
+      _oddsPill(match['home'] as String, pctToDecimalOdds(bestHomePct), kGreen, bestHomeBk),
       if (hasDraw) ...[
         const SizedBox(width: 6),
-        _oddsPill('Draw', dOdds, kOrange),
+        _oddsPill('Draw', pctToDecimalOdds(bestDrawPct), kOrange, bestDrawBk),
       ],
       const SizedBox(width: 6),
-      _oddsPill(match['away'] as String, aOdds, kBlue),
+      _oddsPill(match['away'] as String, pctToDecimalOdds(bestAwayPct), kBlue, bestAwayBk),
     ]);
   }
 
-  Widget _oddsPill(String label, String odds, Color color) => Expanded(
+  Widget _oddsPill(String label, String odds, Color color, [String bookmaker = '']) => Expanded(
     child: Container(
       padding: const EdgeInsets.symmetric(vertical: 8),
       decoration: BoxDecoration(
@@ -3005,6 +3028,12 @@ class MatchCard extends StatelessWidget {
         Text(label,
             style: TextStyle(color: Colors.grey.shade500, fontSize: 9),
             maxLines: 1, overflow: TextOverflow.ellipsis, textAlign: TextAlign.center),
+        if (bookmaker.isNotEmpty) ...[
+          const SizedBox(height: 1),
+          Text('@$bookmaker',
+              style: TextStyle(color: color.withOpacity(0.55), fontSize: 8),
+              maxLines: 1, overflow: TextOverflow.ellipsis, textAlign: TextAlign.center),
+        ],
       ]),
     ),
   );
@@ -3102,7 +3131,6 @@ class _OverviewTab extends StatelessWidget {
     final injuries    = List<String>.from(match['injuries']    ?? []);
     final suspensions = List<String>.from(match['suspensions'] ?? []);
     final h2h         = match['h2h']         as Map<String, dynamic>?;
-    final aiAcc       = match['aiAccuracy']  as Map<String, dynamic>?;
     final bookmakers = (match['bookmakers'] as List?)?.cast<Map<String, dynamic>>() ?? [];
     final trend      = match['edgeTrend'] as Map<String, dynamic>?;
     return SingleChildScrollView(
@@ -3110,8 +3138,6 @@ class _OverviewTab extends StatelessWidget {
       child: Column(children: [
         _header(),
         const SizedBox(height: 16),
-        if (aiAcc != null) _accuracyBanner(aiAcc),
-        if (aiAcc != null) const SizedBox(height: 16),
         _aiCard(trend),
         if (h2h != null) ...[
           const SizedBox(height: 16),
@@ -3218,13 +3244,13 @@ class _OverviewTab extends StatelessWidget {
         Row(children: [
           const Icon(Icons.auto_awesome, color: kGreen, size: 16),
           const SizedBox(width: 6),
-          Text(isDevig ? 'CONSENSUS ODDS' : 'AI ANALYSIS',
+          Text(isDevig ? 'CONSENSUS ODDS' : 'STATISTICAL MODEL',
               style: const TextStyle(color: kGreen, fontWeight: FontWeight.w700, fontSize: 12, letterSpacing: 0.5)),
           const Spacer(),
           edgeTrendBadge(trend),
         ]),
         const SizedBox(height: 12),
-        const Text('Based on recent form, head-to-head record, home advantage and squad strength.',
+        const Text('Poisson model probabilities — based on historical goals, home advantage and team attack/defence ratings.',
             style: TextStyle(color: Colors.grey, fontSize: 13)),
         const SizedBox(height: 12),
         valueRow('Home win', match['homePct'] as int, bookieHome, kGreen),
@@ -3245,8 +3271,8 @@ class _OverviewTab extends StatelessWidget {
               const SizedBox(width: 6),
               Expanded(child: Text(
                 homeEdge >= awayEdge
-                    ? '${isDevig ? "Consensus shows" : "AI sees"} a +$homeEdge% edge on ${match['home']} Win compared to bookmaker odds.'
-                    : '${isDevig ? "Consensus shows" : "AI sees"} a +$awayEdge% edge on ${match['away']} Win compared to bookmaker odds.',
+                    ? '${isDevig ? "Consensus shows" : "Model estimates"} a +$homeEdge% edge on ${match['home']} Win vs bookmaker implied odds.'
+                    : '${isDevig ? "Consensus shows" : "Model estimates"} a +$awayEdge% edge on ${match['away']} Win vs bookmaker implied odds.',
                 style: const TextStyle(color: Color(0xFFFFD700), fontSize: 12),
               )),
             ]),
@@ -3269,34 +3295,6 @@ class _OverviewTab extends StatelessWidget {
     child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
       Text(label, style: TextStyle(color: Colors.grey.shade400, fontSize: 13)),
       Text(value, style: TextStyle(color: color, fontWeight: FontWeight.w700, fontSize: 13)),
-    ]),
-  );
-
-  Widget _accuracyBanner(Map<String, dynamic> acc) => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-    decoration: BoxDecoration(
-      color: kGreen.withOpacity(0.08),
-      borderRadius: BorderRadius.circular(10),
-      border: Border.all(color: kGreen.withOpacity(0.25)),
-    ),
-    child: Row(children: [
-      Container(
-        padding: const EdgeInsets.all(8),
-        decoration: BoxDecoration(color: kGreen.withOpacity(0.15), shape: BoxShape.circle),
-        child: const Icon(Icons.verified, color: kGreen, size: 16),
-      ),
-      const SizedBox(width: 12),
-      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text(
-          'AI ${acc['pct']}% accurate on ${acc['market']} this month',
-          style: const TextStyle(color: kGreen, fontWeight: FontWeight.w700, fontSize: 13),
-        ),
-        const SizedBox(height: 2),
-        Text(
-          'Based on ${acc['sample']} predictions tracked by OddsVision',
-          style: TextStyle(color: Colors.grey.shade500, fontSize: 11),
-        ),
-      ])),
     ]),
   );
 
@@ -4414,7 +4412,7 @@ class _MarketButton extends StatelessWidget {
                 color: kGreen.withOpacity(0.15),
                 borderRadius: BorderRadius.circular(3),
               ),
-              child: Text('+$edge% edge',
+              child: Text('Model +$edge%',
                   style: const TextStyle(color: kGreen, fontSize: 8, fontWeight: FontWeight.w700)),
             ),
           ],
